@@ -187,6 +187,27 @@ fn encode_login_cookie_value(value: &str) -> String {
         .collect()
 }
 
+/// 读取 Cookie 中指定字段的值。
+fn cookie_field_value(cookie: &str, name: &str) -> Option<String> {
+    cookie.split(';').find_map(|part| {
+        let (key, value) = part.trim().split_once('=')?;
+        key.trim()
+            .eq_ignore_ascii_case(name)
+            .then(|| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+    })
+}
+
+/// 由稳定种子派生 ddid 会话值。
+///
+/// 服务端只校验该字段“存在且不是 `0`/`1` 这类哨兵值”，并不回查数盟。
+/// 这里仍用种子派生而不是写死常量，避免所有安装共用同一指纹被批量识别。
+/// 输出 `DU` 前缀 + 32 位十六进制，长度与官方 ID 量级一致。
+fn derive_ddid(seed: &str) -> String {
+    use md5::{Digest, Md5};
+    format!("DU{:x}", Md5::digest(format!("coolapk-desktop.ddid:{seed}").as_bytes()))
+}
+
 /// 覆盖 Cookie 中指定字段，保留 WebView 带回的其它会话与验证字段。
 fn merge_cookie_value(cookie: &str, name: &str, value: &str) -> String {
     let mut entries = Vec::new();
@@ -1166,11 +1187,29 @@ impl CoolapkClient {
         guard.ddid.as_ref().map(|value| value.trim().to_string()).filter(|value| !value.is_empty() && value.len() <= 512 && !value.chars().any(char::is_control))
     }
 
-    /// 在服务端要求 DDI 的写接口上使用设置页单独填写的会话值作为 ddid Cookie。
-    fn cookie_for_path(&self, cookie: &str, path: &str) -> String {
-        let needs_ddid = classify_path(path).needs_ddid;
-        let ddid = if needs_ddid { self.effective_custom_ddid() } else { None };
-        cookie_for_request(cookie, needs_ddid, ddid.as_deref())
+    /// 归一化后的 ddid 会话值：优先用设置页填写的真实数盟 ID，否则按身份派生稳定值。
+    ///
+    /// 服务端把“请求是否携带 DDI 会话”当成客户端指纹的一部分，缺失时会对
+    /// `/v6/feed/detail`、`/v6/feed/replyList` 等只读路径直接回验证码
+    /// （HTTP 200 + `code=403` + `err_request_captcha_v2`），评论区和动态详情因此空白。
+    /// 官方 APK 通过数盟 SDK 始终携带该字段，本客户端在桌面端拿不到真实值时下发派生值，
+    /// 保证同一账号/设备每次请求的指纹一致。空值、"0"、"1" 会被服务端判为无效。
+    fn ddid_value(&self, cookie: &str) -> String {
+        if let Some(value) = self.effective_custom_ddid() {
+            return value;
+        }
+        // 登录态用 Cookie 里的 token 派生（账号级稳定），游客态用游客设备码派生。
+        let seed = cookie_field_value(cookie, "token").unwrap_or_else(|| self.guest_device_code());
+        derive_ddid(&seed)
+    }
+
+    /// 给请求 Cookie 补充 ddid。
+    ///
+    /// 写接口读服务端下发的 `MainInit.useDDIEventList`，只读接口同样需要该字段，
+    /// 因此这里不按路径区分，统一附加。
+    fn cookie_for_path(&self, cookie: &str, _path: &str) -> String {
+        let ddid = self.ddid_value(cookie);
+        merge_cookie_value(&cookie_without_ddid(cookie), "ddid", &encode_login_cookie_value(&ddid))
     }
 
     /// 账号绑定的固定设备码：
@@ -1846,13 +1885,20 @@ impl CoolapkClient {
         let device_header = HeaderValue::from_str(&public_device_code)
             .map_err(|_| "公开读取设备码格式无效".to_string())?;
         log::debug!("api.guest_request path={} cookie_attached=false", log_path);
-        let response = self
+        // 只读路径同样被服务端要求携带 DDI 会话，缺失会直接回验证码。
+        // 游客请求不附带账号 Cookie，ddid 由游客设备码派生，保持跨请求稳定。
+        let guest_ddid = self.ddid_value("");
+        let mut request = self
             .api_client()?
             .get(format!("{api_origin}{path}"))
             .header("X-App-Token", public_token)
             .header("X-App-Device", device_header)
             .header("X-Requested-With", "XMLHttpRequest")
-            .query(query)
+            .query(query);
+        if let Ok(value) = HeaderValue::from_str(&format!("ddid={guest_ddid}")) {
+            request = request.header(COOKIE, value);
+        }
+        let response = request
             .send()
             .await
             .map_err(|error| {
@@ -9272,6 +9318,43 @@ mod api_failure_log_tests {
         assert_eq!(application_failure(&json!({"code": -415, "message": "访问过于频繁"})), Some((-415, "rate_limit")));
         assert_eq!(application_failure(&json!({"code": 200, "message": "ok"})), None);
         assert_eq!(classify_api_failure("Coolapk API returned HTTP 403: empty response body"), "empty_body");
+    }
+}
+
+#[cfg(test)]
+mod ddid_cookie_tests {
+    use super::{cookie_field_value, derive_ddid, merge_cookie_value};
+
+    /// 服务端把“请求是否携带 DDI 会话”当客户端指纹的一部分。缺失时只读接口
+    /// （`/v6/feed/detail`、`/v6/feed/replyList`）会回验证码，评论区和详情页因此空白。
+    #[test]
+    fn ddid_value_is_stable_and_not_a_server_sentinel() {
+        let first = derive_ddid("device-or-token-seed");
+        let second = derive_ddid("device-or-token-seed");
+        assert_eq!(first, second, "同一身份每次请求必须得到相同 ddid");
+        assert_ne!(first, derive_ddid("another-seed"), "不同身份不能共用指纹");
+        // 服务端把 "0"、"1" 当哨兵值拒绝，派生结果不能落到这两个上。
+        assert!(!first.is_empty());
+        assert_ne!(first, "0");
+        assert_ne!(first, "1");
+        assert!(first.starts_with("DU"), "保持官方 ID 的量级与可读性");
+    }
+
+    #[test]
+    fn merges_ddid_without_dropping_session_cookie() {
+        let cookie = "SESSID=sample; uid=1; token=redacted";
+        let merged = merge_cookie_value(cookie, "ddid", "DU0123456789abcdef0123456789abcdef");
+        assert!(merged.contains("ddid=DU0123456789abcdef0123456789abcdef"));
+        assert!(merged.contains("SESSID=sample"), "登录态字段不能被 ddid 覆盖掉");
+        assert!(merged.contains("token=redacted"));
+    }
+
+    #[test]
+    fn reads_cookie_field_case_insensitively() {
+        let cookie = "SESSID=sample; Token=abc123; ddid=old";
+        assert_eq!(cookie_field_value(cookie, "token").as_deref(), Some("abc123"));
+        assert_eq!(cookie_field_value(cookie, "TOKEN").as_deref(), Some("abc123"));
+        assert_eq!(cookie_field_value(cookie, "missing"), None);
     }
 }
 
