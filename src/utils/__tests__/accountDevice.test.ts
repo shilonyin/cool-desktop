@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { detectAccountDevice, fallbackAccountDevice, parseAccountDevice, type AccountDeviceApi } from '../accountDevice';
+import { detectAccountDevice, fallbackAccountDevice, parseAccountDevice, toDalvikUserAgent, type AccountDeviceApi } from '../accountDevice';
 
 const androidUa = 'Dalvik/2.1.0 (Linux; U; Android 16; 2210132C Build/BP2A.250605.031.A3) (#Build; Xiaomi; 2210132C; BP2A.250605.031.A3; HyperOS_3.0; 3.0.310.0) +CoolMarket/16.5.1';
 const appleUa = 'Mozilla/5.0 (iPhone; CPU iPhone OS 26_0 like Mac OS X) (#Build; Apple; iPhone18,2; 23A341; 26.0) +CoolMarket/16.5.1';
@@ -54,5 +54,31 @@ describe('账号历史机型识别', () => {
     const pending = detectAccountDevice('123', api);
     await vi.advanceTimersByTimeAsync(20_000);
     expect(await pending).toBeNull();
+  });
+});
+
+// 回归护栏：酷安边缘网关只放行 Dalvik 形态 UA，Mozilla 形态（iOS/macOS 历史记录与旧兜底模板）
+// 会被回 403 空响应体，导致整个客户端所有接口失败。这里锁定下发给 Rust 的 UA 形态。
+describe('下发 UA 必须是网关接受的 Dalvik 形态', () => {
+  it('兜底模板与历史 iOS 记录都能规范化为 Dalvik', () => {
+    expect(fallbackAccountDevice.userAgent.startsWith('Dalvik/2.1.0 (Linux; U; Android ')).toBe(true);
+    expect(toDalvikUserAgent(appleUa, '16.2.0', '2604201'))
+      .toBe('Dalvik/2.1.0 (Linux; U; Android 26.0; iPhone18,2 Build/23A341) (#Build; Apple; iPhone18,2; 23A341; 26.0) +CoolMarket/16.2.0-2604201-universal');
+  });
+
+  it('Android 历史记录保留机型与 ROM，不被改写成兼容模板', () => {
+    expect(toDalvikUserAgent(androidUa, '16.2.0', '2604201'))
+      .toBe('Dalvik/2.1.0 (Linux; U; Android 16; 2210132C Build/BP2A.250605.031.A3) (#Build; Xiaomi; 2210132C; BP2A.250605.031.A3; HyperOS_3.0; 3.0.310.0) +CoolMarket/16.2.0-2604201-universal');
+  });
+
+  it('无法识别机型或含控制字符时返回 null，交给调用方回退', () => {
+    expect(toDalvikUserAgent('Mozilla/5.0 (iPhone; CPU iPhone OS 26_0 like Mac OS X)', '16.2.0', '2604201')).toBeNull();
+    expect(toDalvikUserAgent(`${androidUa}\r\nInjected: yes`, '16.2.0', '2604201')).toBeNull();
+  });
+
+  it('规范化结果绝不保留 Mozilla 前缀', () => {
+    for (const ua of [appleUa, androidUa, fallbackAccountDevice.userAgent]) {
+      expect(toDalvikUserAgent(ua, '16.2.0', '2604201') ?? '').not.toMatch(/^Mozilla\//);
+    }
   });
 });

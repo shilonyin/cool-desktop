@@ -11,10 +11,55 @@ export interface AccountDeviceProfile {
   dateline: number;
 }
 
+/**
+ * 酷安网关只放行 `Dalvik/2.1.0` 开头的 Android 形态 UA；`Mozilla/5.0` 形态（含 iOS/macOS 历史记录）
+ * 会被边缘 WAF 直接回 403 空响应体。因此所有下发到 Rust 的 UA 都必须先经此函数规范化。
+ */
+export function buildDalvikUserAgent(parts: {
+  android: string; model: string; build: string; brand: string; rom: string; appVersion: string; appCode: string;
+}): string {
+  const { android, model, build, brand, rom, appVersion, appCode } = parts;
+  return `Dalvik/2.1.0 (Linux; U; Android ${android}; ${model} Build/${build}) (#Build; ${brand}; ${model}; ${build}; ${rom}) +CoolMarket/${appVersion}-${appCode}-universal`;
+}
+
+/** 把历史记录里的任意形态 UA 转成网关可接受的 Dalvik 形态；无法识别机型时返回 null。 */
+export function toDalvikUserAgent(userAgent: string, appVersion: string, appCode: string): string | null {
+  if (typeof userAgent !== 'string' || userAgent.length > 2048 || /[\r\n\x00]/.test(userAgent)) return null;
+  const marketSegment = `+CoolMarket/${appVersion}-${appCode}-universal`;
+  // 已经是 Dalvik 形态：只同步酷安版本段，其余（含机型、ROM、CoolapkDesktop* 自标记）原样保留。
+  // 自标记用于 parseAccountDevice 排除本客户端自身记录，重建会破坏这条识别链路。
+  if (userAgent.startsWith('Dalvik/')) {
+    return userAgent.replace(/\+CoolMarket\/\S+/, marketSegment);
+  }
+  const metadata = userAgent.match(/\(#Build;\s*([^)]*)\)/)?.[1]?.split(';').map(value => value.trim());
+  const android = userAgent.match(/Android ([\d.]+);\s*([^;()]+?) Build\/([^\s)]+)/);
+  const apple = userAgent.match(/CPU (?:iPhone )?OS ([\d_]+) like Mac OS X/);
+  const appleOs = userAgent.match(/Mac OS X ([\d_]+)/);
+  const brand = metadata?.[0] || '';
+  const model = metadata?.[1] || android?.[2]?.trim() || '';
+  const build = metadata?.[2] || android?.[3] || '';
+  if (!model || !build) return null;
+  // 系统版本：Android UA 用 Android 版本；Apple UA 用 OS 版本（下划线转点）。
+  const androidVersion = android?.[1] || (apple?.[1] || appleOs?.[1] || '').replace(/_/g, '.');
+  if (!androidVersion) return null;
+  // ROM 段：`(#Build; 品牌; 机型; 构建号; ROM名称; ROM版本)` 的第 4 段起。Android 历史记录可能携带
+  // 两段（如 `HyperOS_3.0; 3.0.310.0`），拼接后原样保留，避免把真实 ROM 改写成系统版本号。
+  const rom = metadata && metadata.length > 3 ? metadata.slice(3).join('; ') : androidVersion;
+  return buildDalvikUserAgent({
+    android: androidVersion, model, build,
+    brand: brand || (apple ? 'Apple' : 'Xiaomi'),
+    rom, appVersion, appCode,
+  });
+}
+
 // 型号来自随包 AppleDB 表；系统为兼容模板，Build 不伪装成真实设备构建号。
+// UA 采用 Dalvik 形态：网关不接受 Mozilla 形态，否则整个客户端会 403。
 export const fallbackAccountDevice: AccountDeviceProfile = {
   manufacturer: 'Apple', brand: 'Apple', model: 'iPhone19,7', build: 'compatibility',
-  userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 27_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) (#Build; Apple; iPhone19,7; compatibility; 27.0) +CoolMarket/16.2.0-2604201-universal CoolapkDesktopFallback',
+  userAgent: buildDalvikUserAgent({
+    android: '18', model: 'iPhone19,7', build: 'compatibility', brand: 'Apple', rom: '18',
+    appVersion: '16.2.0', appCode: '2604201',
+  }) + ' CoolapkDesktopFallback',
   label: 'iPhone 18 Pro Max', source: 'fallback', dateline: 0,
 };
 

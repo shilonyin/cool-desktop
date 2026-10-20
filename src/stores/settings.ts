@@ -4,6 +4,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { resolveDeviceIdentity } from '../utils/devicePresets';
 import type { AccountDeviceProfile } from '../utils/accountDevice';
+import { toDalvikUserAgent } from '../utils/accountDevice';
 import { resolveDesktopCommentsOnRight } from '../utils/desktopCommentsPreference';
 import { normalizeSearchTabOrder } from '../utils/searchTabOrder';
 import { normalizeLightBackground, buildLightBackground } from '../utils/lightBackground';
@@ -789,7 +790,9 @@ export const useSettingsStore = defineStore('settings', () => {
                 model: automaticDeviceProfile.value.model,
                 build: automaticDeviceProfile.value.build,
                 // 仅复用设备与系统信息，酷安版本保持与本客户端请求头一致，并标记本客户端发布的记录。
-                userAgent: `${automaticDeviceProfile.value.userAgent.replace(/\+CoolMarket\/\S+/, `+CoolMarket/${defaultDeviceFingerprint.appVersion}-${defaultDeviceFingerprint.appCode}-universal`)}${automaticDeviceProfile.value.source === 'history' ? ' CoolapkDesktopAuto' : ''}`,
+                // 必须重新规范化为 Dalvik 形态：历史记录可能来自 iOS（Mozilla UA），直接下发会被网关 403。
+                userAgent: `${toDalvikUserAgent(automaticDeviceProfile.value.userAgent, defaultDeviceFingerprint.appVersion, defaultDeviceFingerprint.appCode)
+                  ?? buildDeviceUserAgent({ ...defaultDeviceFingerprint, model: automaticDeviceProfile.value.model, build: automaticDeviceProfile.value.build })}${automaticDeviceProfile.value.source === 'history' ? ' CoolapkDesktopAuto' : ''}`,
                 ...(automaticDeviceProfile.value.sdkInt ? { sdkInt: automaticDeviceProfile.value.sdkInt } : {}),
               } : {}),
           deviceId,
