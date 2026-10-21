@@ -41,10 +41,10 @@ describe('renderReleaseMarkdown', () => {
   });
 
   it('renders links and autolinks safely', () => {
-    const input = '[官方仓库](https://github.com/daimiaopeng/coolapk-desktop)\nhttps://github.com/daimiaopeng';
+    const input = '[官方仓库](https://github.com/shilonyin/cool-desktop)\nhttps://github.com/shilonyin';
     const output = renderReleaseMarkdown(input);
-    expect(output).toContain('<a href="https://github.com/daimiaopeng/coolapk-desktop" target="_blank" rel="noopener noreferrer">官方仓库</a>');
-    expect(output).toContain('<a href="https://github.com/daimiaopeng" target="_blank" rel="noopener noreferrer">https://github.com/daimiaopeng</a>');
+    expect(output).toContain('<a href="https://github.com/shilonyin/cool-desktop" target="_blank" rel="noopener noreferrer">官方仓库</a>');
+    expect(output).toContain('<a href="https://github.com/shilonyin" target="_blank" rel="noopener noreferrer">https://github.com/shilonyin</a>');
   });
 
   it('escapes dangerous HTML tags to prevent XSS', () => {

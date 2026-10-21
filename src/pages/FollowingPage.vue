@@ -340,7 +340,13 @@ async function loadFollowUsers(isRefresh: boolean = true) {
 
   usersLoading.value = true;
   try {
-    const myUid = String(authStore.user?.uid || '1451266');
+    // 关注列表只属于当前登录账号；未登录时不查询，避免拿固定 UID 顶替他人身份。
+    const myUid = String(authStore.user?.uid || '');
+    if (!myUid) {
+      usersHasMore.value = false;
+      usersLoading.value = false;
+      return;
+    }
     let p = usersPage.value;
     // 自动连续翻页获取（单次最多同步读取 10 页 / 200 人，确保用户拥有的 50+ 关注酷友全部完整呈现）
     while (p <= 10) {
@@ -378,7 +384,13 @@ async function loadFansUsers(isRefresh: boolean = true) {
 
   fansLoading.value = true;
   try {
-    const myUid = String(authStore.user?.uid || '1451266');
+    // 粉丝列表同样只属于当前登录账号。
+    const myUid = String(authStore.user?.uid || '');
+    if (!myUid) {
+      fansHasMore.value = false;
+      fansLoading.value = false;
+      return;
+    }
     let p = fansPage.value;
     while (p <= 10) {
       const res = await CoolapkTauriAPI.getFansList(myUid, p);

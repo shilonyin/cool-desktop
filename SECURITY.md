@@ -9,7 +9,7 @@
 | 最新稳定版本 | ✅ |
 | 旧版本 | ❌ |
 
-请先从 [Releases](https://github.com/daimiaopeng/coolapk-desktop/releases) 更新到最新版本，再确认问题是否仍然存在。
+请先从 [Releases](https://github.com/shilonyin/cool-desktop/releases) 更新到最新版本，再确认问题是否仍然存在。
 
 ## 报告安全漏洞
 
@@ -17,7 +17,7 @@
 
 推荐通过 GitHub 的 **Private Vulnerability Reporting** 私下提交安全报告：
 
-https://github.com/daimiaopeng/coolapk-desktop/security/advisories/new
+https://github.com/shilonyin/cool-desktop/security/advisories/new
 
 报告时请尽可能提供：
 

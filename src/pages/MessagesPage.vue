@@ -96,15 +96,6 @@
         ref="chatAreaRef" 
         @scroll="handleChatScroll"
       >
-        <!-- 开发者反馈专属通道提示横幅 -->
-        <div v-if="isDeveloperSession" class="developer-feedback-banner">
-          <i class="fas fa-lightbulb banner-icon"></i>
-          <div class="banner-content">
-            <div class="banner-title">酷安桌面版 · 开发者反馈通道</div>
-            <div class="banner-desc">欢迎提出使用问题与功能建议。建议附带具体复现步骤或截图，开发者看到后会尽快跟进回复！</div>
-          </div>
-        </div>
-
         <div class="chat-status" v-if="loadingHistory">
           <LoadingState text="加载聊天记录..." />
         </div>
@@ -346,7 +337,6 @@ import {
   isMessageSentByCurrentUser,
 } from '../utils/messageUnread';
 
-import { DEVELOPER_UID, DEVELOPER_USERNAME } from '../utils/feedback';
 import { DIAGNOSTIC_LINK_LABEL, getDiagnosticLink, uploadFeedbackDiagnosticImage } from '../utils/feedbackDiagnostics';
 
 import { useRoute, useRouter } from 'vue-router';
@@ -360,11 +350,6 @@ const notificationStore = useNotificationStore();
 const settingsStore = useSettingsStore();
 const showShortcutHints = useShortcutHints();
 const currentUserUid = computed(() => authStore.user?.uid || '');
-
-const isDeveloperSession = computed(() => {
-  const partnerUid = getSessionPartnerUid(currentSession.value);
-  return String(partnerUid || '') === DEVELOPER_UID;
-});
 
 const navigateToUser = (uid?: string | number) => {
   if (uid === undefined || uid === null || uid === '') return;
@@ -1559,10 +1544,10 @@ async function openTargetConversation(uid: string) {
     return;
   }
 
-  // 优先使用已知开发者昵称或路由传参，瞬时呈现真实名字，消除「酷友_xxxx」闪烁
+  // 优先使用路由传参的昵称，瞬时呈现真实名字，消除「酷友_xxxx」闪烁
   const queryUsername = (route.query.username as string) || '';
   const queryAvatar = (route.query.avatar as string) || '';
-  const defaultUsername = (targetUid === DEVELOPER_UID ? DEVELOPER_USERNAME : queryUsername) || `酷友_${targetUid.slice(-4)}`;
+  const defaultUsername = queryUsername || `酷友_${targetUid.slice(-4)}`;
 
   const tempSession = {
     id: `new-${targetUid}`,
@@ -3264,57 +3249,6 @@ onUnmounted(() => {
   color: var(--text-primary);
   cursor: pointer;
 }
-.developer-feedback-banner {
-  display: flex;
-  align-items: flex-start;
-  gap: 12px;
-  padding: 12px 16px;
-  background: linear-gradient(135deg, rgba(16, 185, 129, 0.08) 0%, rgba(5, 150, 105, 0.04) 100%);
-  border: 1px solid rgba(16, 185, 129, 0.2);
-  border-radius: var(--radius-card, 12px);
-  margin-bottom: var(--space-3);
-  color: var(--text-primary);
-  animation: bannerFadeIn 0.25s ease-out;
-}
-
-@keyframes bannerFadeIn {
-  from {
-    opacity: 0;
-    transform: translateY(-6px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
-
-.developer-feedback-banner .banner-icon {
-  font-size: 18px;
-  color: var(--brand-primary, #10b981);
-  margin-top: 2px;
-  flex-shrink: 0;
-}
-
-.developer-feedback-banner .banner-content {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.developer-feedback-banner .banner-title {
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--brand-primary, #10b981);
-}
-
-.developer-feedback-banner .banner-desc {
-  font-size: 12px;
-  line-height: 1.5;
-  color: var(--text-secondary);
-}
-
 textarea::placeholder {
   color: var(--text-tertiary);
 }

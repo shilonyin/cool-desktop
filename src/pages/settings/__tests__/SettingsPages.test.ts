@@ -491,13 +491,29 @@ describe('设置页面交互', () => {
     expect(wrapper.text()).toContain(APP_VERSION);
     expect(wrapper.get('.about-channel').text()).toBe(`${APP_VERSION.includes('-') ? '测试版' : '稳定版'} · 稳定版更新渠道`);
     expect(wrapper.text()).toContain('1.2k');
-    expect(wrapper.text()).toContain('1129528119');
     await wrapper.get('.about-head button').trigger('click');
     expect(eventSpy).toHaveBeenCalled();
     await wrapper.find('[title="打开项目主页"]').trigger('click');
-    expect(mocks.openUrl).toHaveBeenCalledWith('https://github.com/daimiaopeng/coolapk-desktop', 'system');
-    await wrapper.find('[title="加入 QQ 交流群"]').trigger('click');
-    expect(mocks.openUrl).toHaveBeenCalledWith('https://qm.qq.com/q/bAOWmjCfJ0', 'system');
+    expect(mocks.openUrl).toHaveBeenCalledWith('https://github.com/shilonyin/cool-desktop', 'system');
+    await wrapper.find('[title="打开问题列表"]').trigger('click');
+    expect(mocks.openUrl).toHaveBeenCalledWith('https://github.com/shilonyin/cool-desktop/issues', 'system');
+    // 「提交反馈」是 AppButton，没有 title 属性，按文本定位。
+    const feedbackBtn = wrapper.findAll('button').find((b) => b.text().includes('提交反馈'));
+    expect(feedbackBtn).toBeTruthy();
+    await feedbackBtn!.trigger('click');
+    expect(mocks.openUrl).toHaveBeenCalledWith(expect.stringContaining('github.com/shilonyin/cool-desktop/issues/new'), 'system');
+    vi.unstubAllGlobals();
+  });
+
+  it('关于页不展示作者个人联系方式', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, json: async () => ({ stargazers_count: 1, forks_count: 0, open_issues_count: 0 }) }));
+    const { wrapper } = mountPage(AboutSettingsPage);
+    await flushPromises();
+    const text = wrapper.text();
+    // 只保留项目信息，不出现作者昵称、邮箱、QQ 群号或个人主页。
+    expect(text).not.toMatch(/oxygen|1129528119|@gmail\.com|联系作者|酷安主页/);
+    expect(wrapper.find('[title="打开作者主页"]').exists()).toBe(false);
+    expect(wrapper.find('[title="加入 QQ 交流群"]').exists()).toBe(false);
     vi.unstubAllGlobals();
   });
 

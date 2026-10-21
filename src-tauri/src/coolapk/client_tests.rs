@@ -1294,7 +1294,7 @@ fn test_extract_readable_content_strips_chrome() {
 <html><head><title>动态分享 - 酷安</title></head>
 <body>
 <header><a href="/">酷安</a><a href="/editorChoice">编辑精选</a></header>
-<nav><a href="/apk/">应用</a><a href="/game/">游戏</a><a href="/u/1451266">oxygen的喵</a></nav>
+<nav><a href="/apk/">应用</a><a href="/game/">游戏</a><a href="/u/10086">示例用户</a></nav>
 <div>您当前查看的是「动态分享」，请用酷安手机APP扫码查看详情<br>下载酷安手机APP</div>
 <article>
 <p>在家用 Windows 刷酷安的新方式——</p>
@@ -1308,7 +1308,7 @@ fn test_extract_readable_content_strips_chrome() {
     assert!(cleaned.contains("在家用 Windows 刷酷安"), "正文应保留");
     assert!(cleaned.contains("#数码日常#"), "正文链接应保留");
     assert!(!cleaned.contains("编辑精选"), "导航不应残留");
-    assert!(!cleaned.contains("oxygen的喵"), "导航用户链接不应残留");
+    assert!(!cleaned.contains("示例用户"), "导航用户链接不应残留");
     assert!(!cleaned.contains("粤ICP备"), "页脚不应残留");
     assert!(!cleaned.contains("alert"), "脚本不应残留");
     assert!(!cleaned.contains("<script"), "script 标签不应残留");
@@ -1338,16 +1338,16 @@ fn test_extract_history_list_preserves_entities() {
                 "title": "oxygen",
                 "description": "",
                 "logo": "http://avatar.coolapk.com/data/001/45/12/66_avatar_middle.jpg",
-                "url": "u/1451266",
+                "url": "u/10086",
                 "historyType": "user",
                 "typeName": "用户",
-                "id": "user:1451266",
+                "id": "user:10086",
                 "entityType": "history",
                 "dateline": 1786022084
             },
             {
                 "id": 247872765,
-                "uid": 1451266,
+                "uid": 10086,
                 "target_type": "apk",
                 "entityType": "recentHistory",
                 "entityId": 247872765,
@@ -1365,7 +1365,7 @@ fn test_extract_history_list_preserves_entities() {
 
     let history = &list[0];
     assert_eq!(history["entityType"], "history");
-    assert_eq!(history["url"], "/u/1451266", "url 应补全前导斜杠");
+    assert_eq!(history["url"], "/u/10086", "url 应补全前导斜杠");
     assert_eq!(
         history["logo"], "https://avatar.coolapk.com/data/001/45/12/66_avatar_middle.jpg",
         "http 图片应升级为 https"
@@ -1515,7 +1515,7 @@ async fn test_login_cookie_dirty_input_sanitized() {
     let client = CoolapkClient::new();
     client.persist_cookie_to(cookie_file.clone());
 
-    let dirty = "SESSID=abc;\r\n uid=10086; 昵称=oxygen的喵; other=\"v\"";
+    let dirty = "SESSID=abc;\r\n uid=10086; 昵称=示例用户; other=\"v\"";
     client.set_user_cookie(dirty.to_string()).unwrap();
     // 先建立账户，set_user_cookie 才会同步写 JSON 账户库
     client
@@ -1562,7 +1562,7 @@ async fn verify_fans_user_list_fixed() {
         }
     }
 
-    match client.get_fans_user_list("1451266", 1).await {
+    match client.get_fans_user_list("10086", 1).await {
         Ok(res) => {
             let arr = res["data"].as_array().cloned().unwrap_or_default();
             println!("[fixed fansList] len={}", arr.len());

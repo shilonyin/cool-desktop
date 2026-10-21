@@ -1,8 +1,8 @@
-import type { Router } from 'vue-router';
 import { APP_VERSION } from '../constants/version';
 
-export const DEVELOPER_UID = '1451266';
-export const DEVELOPER_USERNAME = 'oxygen的喵';
+/** 反馈统一走项目 Issues，不指向任何个人账号。 */
+export const GITHUB_PROJECT_URL = 'https://github.com/shilonyin/cool-desktop';
+export const GITHUB_ISSUES_URL = `${GITHUB_PROJECT_URL}/issues`;
 
 export function getFeedbackTemplate(): string {
   let osName = 'Windows';
@@ -31,26 +31,14 @@ export function getFeedbackTemplate(): string {
 - 复现步骤：`;
 }
 
-export function openFeedbackMessage(
-  router: Router,
-  authStore?: { isLoggedIn: boolean; openLoginModal?: () => void },
-) {
-  if (authStore && !authStore.isLoggedIn) {
-    if (typeof authStore.openLoginModal === 'function') {
-      authStore.openLoginModal();
-    }
-    return;
-  }
-
-  const initialText = getFeedbackTemplate();
-  void router.push({
-    path: '/messages',
-    query: {
-      uid: DEVELOPER_UID,
-      username: DEVELOPER_USERNAME,
-      initialText,
-      feedback: '1',
-      open: String(Date.now()),
-    },
-  });
+/**
+ * 生成预填版本与系统的 Issue 链接。
+ *
+ * 反馈不再私信任何个人账号：Issue 是公开可追溯的，也便于其他使用者检索同类问题。
+ */
+export function createFeedbackIssueUrl(): string {
+  const url = new URL(`${GITHUB_ISSUES_URL}/new`);
+  url.searchParams.set('title', `酷安客户端问题反馈 v${APP_VERSION}`);
+  url.searchParams.set('body', getFeedbackTemplate());
+  return url.toString();
 }

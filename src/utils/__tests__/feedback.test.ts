@@ -1,5 +1,5 @@
 import { afterEach, describe, it, expect, vi } from 'vitest';
-import { DEVELOPER_UID, getFeedbackTemplate, openFeedbackMessage } from '../feedback';
+import { createFeedbackIssueUrl, getFeedbackTemplate, GITHUB_ISSUES_URL, GITHUB_PROJECT_URL } from '../feedback';
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -29,10 +29,6 @@ describe('feedback utils', () => {
     expect(getFeedbackTemplate()).toContain(`- 操作系统：${osName}\n`);
   });
 
-  it('开发者 UID 正确', () => {
-    expect(DEVELOPER_UID).toBe('1451266');
-  });
-
   it('生成包含版本号和系统的反馈模版', () => {
     const template = getFeedbackTemplate();
     expect(template).toContain('【酷安客户端问题反馈】');
@@ -41,25 +37,21 @@ describe('feedback utils', () => {
     expect(template).toContain('问题描述：');
   });
 
-  it('未登录时触发 openLoginModal', () => {
-    const router = { push: vi.fn() } as any;
-    const openLoginModal = vi.fn();
-    openFeedbackMessage(router, { isLoggedIn: false, openLoginModal });
-
-    expect(openLoginModal).toHaveBeenCalled();
-    expect(router.push).not.toHaveBeenCalled();
+  it('反馈入口指向项目 Issues，而不是任何个人账号', () => {
+    expect(GITHUB_PROJECT_URL).toBe('https://github.com/shilonyin/cool-desktop');
+    expect(GITHUB_ISSUES_URL).toBe('https://github.com/shilonyin/cool-desktop/issues');
   });
 
-  it('已登录时跳转 /messages 并携带开发者 UID 与模版', () => {
-    const router = { push: vi.fn() } as any;
-    openFeedbackMessage(router, { isLoggedIn: true });
+  it('生成的 Issue 链接预填标题与反馈模版', () => {
+    const url = new URL(createFeedbackIssueUrl());
+    expect(url.origin + url.pathname).toBe('https://github.com/shilonyin/cool-desktop/issues/new');
+    expect(url.searchParams.get('title')).toContain('酷安客户端问题反馈');
+    expect(url.searchParams.get('body')).toContain('【酷安客户端问题反馈】');
+  });
 
-    expect(router.push).toHaveBeenCalledWith(expect.objectContaining({
-      path: '/messages',
-      query: expect.objectContaining({
-        uid: '1451266',
-        initialText: expect.stringContaining('【酷安客户端问题反馈】'),
-      }),
-    }));
+  it('反馈模版不包含任何个人信息', () => {
+    const template = getFeedbackTemplate();
+    // 作者昵称、邮箱、QQ 群号都不应出现在预填内容里。
+    expect(template).not.toMatch(/oxygen|1129528119|@gmail\.com|daimiaopeng/i);
   });
 });

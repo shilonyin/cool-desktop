@@ -143,7 +143,8 @@ import { useDownloadStore } from '../../stores/downloads';
 import { APP_VERSION } from '../../constants/version';
 import { triggerSidebarTransition } from '../../utils/routeTransition';
 import { activateHomeTab } from '../../utils/homeTab';
-import { openFeedbackMessage } from '../../utils/feedback';
+import { createFeedbackIssueUrl } from '../../utils/feedback';
+import { CoolapkTauriAPI } from '../../api/coolapk';
 
 const route = useRoute();
 const router = useRouter();
@@ -188,7 +189,7 @@ function handlePrimaryNavClick(event: MouseEvent, path: string) {
 }
 
 function handleFeedback() {
-  openFeedbackMessage(router, authStore);
+  void CoolapkTauriAPI.openUrl(createFeedbackIssueUrl(), 'system');
 }
 
 function handleNavClick(event: MouseEvent) {
