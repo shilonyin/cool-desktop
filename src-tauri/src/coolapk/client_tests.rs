@@ -1105,8 +1105,10 @@ async fn test_login_cookie_persistence_flow() {
         .unwrap();
     assert_eq!(client.get_user_cookie(), Some(fake_cookie.to_string()));
     assert!(accounts_file.exists(), "登录后凭据应已写入 JSON 账户库");
-    let root: serde_json::Value =
-        serde_json::from_str(&std::fs::read_to_string(&accounts_file).unwrap()).unwrap();
+    let root: serde_json::Value = crate::coolapk::credential_cipher::decode_accounts_root(
+        &std::fs::read_to_string(&accounts_file).unwrap(),
+    )
+    .expect("账户库应可解密读取");
     assert_eq!(
         root["lastLoginUid"].as_str(),
         Some("10086"),
@@ -1125,8 +1127,10 @@ async fn test_login_cookie_persistence_flow() {
     // 4. 模拟退出登录：clear_user_cookie 清空内存与当前登录标记（账户记录保留）
     restarted.clear_user_cookie().unwrap();
     assert_eq!(restarted.get_user_cookie(), None);
-    let root2: serde_json::Value =
-        serde_json::from_str(&std::fs::read_to_string(&accounts_file).unwrap()).unwrap();
+    let root2: serde_json::Value = crate::coolapk::credential_cipher::decode_accounts_root(
+        &std::fs::read_to_string(&accounts_file).unwrap(),
+    )
+    .expect("账户库应可解密读取");
     assert_eq!(
         root2["lastLoginUid"].as_str(),
         Some(""),
@@ -1176,8 +1180,10 @@ async fn test_staged_cookie_does_not_create_credential_less_account() {
     );
     let exists = accounts_file.exists();
     if exists {
-        let root: serde_json::Value =
-            serde_json::from_str(&std::fs::read_to_string(&accounts_file).unwrap()).unwrap();
+        let root: serde_json::Value = crate::coolapk::credential_cipher::decode_accounts_root(
+            &std::fs::read_to_string(&accounts_file).unwrap(),
+        )
+        .expect("账户库应可解密读取");
         assert_eq!(
             root["accounts"].as_array().map(|a| a.len()),
             Some(0),
@@ -1532,8 +1538,10 @@ async fn test_login_cookie_dirty_input_sanitized() {
     assert!(stored.contains("SESSID=abc") && stored.contains("uid=10086"));
     // 落盘 JSON 账户库中的 cookie 字段必须是清洗后的安全形态
     let accounts_file: PathBuf = dir.join("accounts.json");
-    let root: serde_json::Value =
-        serde_json::from_str(&std::fs::read_to_string(&accounts_file).unwrap()).unwrap();
+    let root: serde_json::Value = crate::coolapk::credential_cipher::decode_accounts_root(
+        &std::fs::read_to_string(&accounts_file).unwrap(),
+    )
+    .expect("账户库应可解密读取");
     let cookie = root["accounts"][0]["cookie"].as_str().unwrap_or("");
     assert!(
         !cookie.contains('\r') && !cookie.contains('\n'),

@@ -147,6 +147,22 @@ export function loadNECaptchaScript(): Promise<void> {
 }
 
 /**
+ * 把验证码凭证登记到本地后端，之后所有请求以 Cookie `validate` 携带。
+ *
+ * GET 类接口（`replyList`、`detail`）无法用 `_v2_post_token` 表单字段携带凭证，
+ * 只有写进 Cookie 才能让它们凭验证码通过风控。用动态导入是为了让本模块在
+ * 非 Tauri 环境（单测、纯浏览器预览）下仍可用，登记失败不影响验证结果本身。
+ */
+async function registerCaptchaProof(token: string): Promise<void> {
+  try {
+    const { invoke } = await import('@tauri-apps/api/core');
+    await invoke('set_captcha_proof', { token });
+  } catch {
+    // 后端不可用时静默跳过：凭证仍会以表单字段的形式传给写接口。
+  }
+}
+
+/**
  * 唤起网易易盾滑块弹窗并完成验证
  * @param captchaId 易盾业务 ID，默认使用酷安官方 ID
  * @returns 返回拼装后的官方标准 Token，格式为 `NEC:{captchaId前8位}:{validate}`
@@ -205,7 +221,8 @@ export async function verifyWithCaptcha(captchaId = DEFAULT_COOLAPK_CAPTCHA_ID):
             const prefix = captchaId.slice(0, 8);
             const token = `NEC:${prefix}:${data.validate}`;
             cleanup();
-            resolve(token);
+            // 先登记再返回：调用方拿到凭证后可能立刻发起 GET 请求。
+            void registerCaptchaProof(token).finally(() => resolve(token));
           } else {
             resolved = true;
             cleanup();

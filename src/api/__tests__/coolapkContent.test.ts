@@ -8,6 +8,12 @@ function okResponse(data: unknown) {
   return { code: 200, data };
 }
 
+// 验证码通过后会额外调用 set_captcha_proof 登记凭证，
+// 因此断言按命令归类比依赖全局调用序号更稳定。
+function invokedCommands(): string[] {
+  return vi.mocked(invoke).mock.calls.map(([command]) => String(command));
+}
+
 describe('CoolapkTauriAPI 内容新页接口封装', () => {
   beforeEach(() => {
     vi.mocked(invoke).mockReset();
@@ -81,7 +87,10 @@ describe('CoolapkTauriAPI 内容新页接口封装', () => {
 
     await expect(CoolapkTauriAPI.getFeedDetail('456')).resolves.toEqual(okResponse({ message: '网页完整正文' }));
     expect(invoke).toHaveBeenLastCalledWith('fetch_external_page', { url: 'https://www.coolapk.com/feed/456' });
-    expect(invoke).toHaveBeenCalledTimes(failure === 'retry' ? 3 : 2);
+    // 只有成功拿到验证码凭证时才会多一次 set_captcha_proof 登记。
+    const expectedProofCalls = failure === 'retry' ? 1 : 0;
+    expect(invokedCommands().filter((command) => command === 'set_captcha_proof')).toHaveLength(expectedProofCalls);
+    expect(invoke).toHaveBeenCalledTimes(failure === 'retry' ? 4 : 2);
   });
 
   it('验证码和网页兜底都失败后释放全文请求，允许同帖再次展开', async () => {
@@ -108,11 +117,21 @@ describe('CoolapkTauriAPI 内容新页接口封装', () => {
     (window as any).initNECaptcha = vi.fn((config) => {
       config.onVerify?.(null, { validate: 'validated' });
     });
-    vi.mocked(invoke).mockRejectedValueOnce(JSON.stringify({ code: 403, messageStatus: 'err_request_captcha_v2' })).mockResolvedValueOnce(okResponse({ message: '完整正文' }));
+    // 按命令决定返回值：验证码通过后会先登记凭证再重试，顺序断言不再可靠。
+    const detailCalls: any[] = [];
+    vi.mocked(invoke).mockImplementation(async (command: string, args: any) => {
+      if (command === 'set_captcha_proof') return undefined as any;
+      detailCalls.push(args);
+      if (detailCalls.length === 1) throw JSON.stringify({ code: 403, messageStatus: 'err_request_captcha_v2' });
+      return okResponse({ message: '完整正文' }) as any;
+    });
 
     await expect(CoolapkTauriAPI.getFeedDetail('456')).resolves.toEqual(okResponse({ message: '完整正文' }));
-    expect(invoke).toHaveBeenNthCalledWith(1, 'get_feed_detail', { feedId: '456' });
-    expect(invoke).toHaveBeenNthCalledWith(2, 'get_feed_detail', { feedId: '456', postToken: 'NEC:414e5c9b:validated', postTokenField: '_v2_post_token' });
+    // 第一次不带令牌，重试时带上验证码凭证。
+    expect(detailCalls[0]).toEqual({ feedId: '456' });
+    expect(detailCalls[1]).toEqual({ feedId: '456', postToken: 'NEC:414e5c9b:validated', postTokenField: '_v2_post_token' });
+    // 凭证同时登记到后端，之后 GET 类接口可以凭 Cookie 通过风控。
+    expect(invoke).toHaveBeenCalledWith('set_captcha_proof', { token: 'NEC:414e5c9b:validated' });
   });
 
   it('酷友圈活动列表调用 get_event_list', async () => {

@@ -95,7 +95,31 @@ static IMAGE_SAVE_LOCK: Mutex<()> = Mutex::new(());
 static IMAGE_TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 /// 登录窗口使用桌面 Chromium UA，避免网易易盾把鼠标事件误判为仅支持触摸事件。
-const LOGIN_WEBVIEW_USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36";
+/// 主版本号取自运行时真实的 WebView 版本：登录页会加载易盾风控脚本，
+/// 硬编码版本一旦落后于真实内核，UA 与浏览器特征不一致会被判定为伪造环境。
+const LOGIN_WEBVIEW_UA_FALLBACK: &str =
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36";
+
+/// 由运行时 WebView 版本拼出与该内核一致的桌面 UA。
+/// 只采用主版本号，其余三段补零，与 Chromium 的常规精简 UA 形态一致。
+fn login_webview_user_agent(webview_version: Option<&str>) -> String {
+    let major = webview_version
+        .and_then(|value| value.split('.').next())
+        .map(str::trim)
+        .filter(|value| !value.is_empty() && value.bytes().all(|byte| byte.is_ascii_digit()));
+    let Some(major) = major else {
+        return LOGIN_WEBVIEW_UA_FALLBACK.to_string();
+    };
+    #[cfg(target_os = "windows")]
+    let platform = "Windows NT 10.0; Win64; x64";
+    #[cfg(target_os = "macos")]
+    let platform = "Macintosh; Intel Mac OS X 10_15_7";
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let platform = "X11; Linux x86_64";
+    #[cfg(not(any(target_os = "windows", target_os = "macos", unix)))]
+    let platform = "Windows NT 10.0; Win64; x64";
+    format!("Mozilla/5.0 ({platform}) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/{major}.0.0.0 Safari/537.36")
+}
 
 #[tauri::command]
 pub async fn get_index_v8_feeds(state: State<'_, AppState>, page: u32) -> Result<Value, String> {
@@ -1155,6 +1179,21 @@ pub async fn get_hot_replies(
     page: u32,
 ) -> Result<Value, String> {
     state.client.get_hot_replies(&feed_id, page).await
+}
+
+/// 登记一次通过网易易盾得到的验证码凭证。
+///
+/// 之后所有请求都会以 Cookie `validate` 携带，GET 类接口（`replyList`、`detail`）
+/// 才能凭验证码通过风控，而不是只能靠 ddid 会话绕过。
+#[tauri::command]
+pub fn set_captcha_proof(state: State<'_, AppState>, token: String) -> Result<(), String> {
+    state.client.set_verification_proof(&token)
+}
+
+/// 清空当前验证码凭证（用户取消验证、服务端重新下发挑战时调用）。
+#[tauri::command]
+pub fn clear_captcha_proof(state: State<'_, AppState>) {
+    state.client.clear_verification_proof();
 }
 
 #[tauri::command]
@@ -3738,7 +3777,11 @@ async fn verify_login_webview(
     if !valid {
         match state.client.login_by_webview_cookie(cookie.as_deref().unwrap_or_default()).await {
             Ok(_) => {
-                log::info!("login.webview_cookie_succeeded");
+                // 桌面端 100% 走这条；access_code 分支只在移动端收到 ck 回跳时才会命中。
+                log::info!(
+                    "login.webview_cookie_succeeded path={}",
+                    if callback.is_some() { "cookie_after_callback" } else { "cookie_only" }
+                );
                 valid = true;
             }
             Err(error) => log::warn!("login.webview_cookie_failed reason={}", login_failure_kind(&error)),
@@ -3805,6 +3848,12 @@ pub async fn open_login_webview(app: tauri::AppHandle) -> Result<(), String> {
         &[("forward", target_login)],
     )
     .map_err(|e| e.to_string())?;
+
+    // forward 只是「尽力而为」：account.coolapk.com 会把 forward 一律覆盖成
+    // https://www.coolapk.com（实测传任何域名都是这个值），因此桌面端拿不到
+    // #/auth_callback 授权码，登录实际依赖监控到落地页后读取 WebView Cookie。
+    // 移动端 WebView 有可能收到 APK 风格的 ck 回跳，两条路径都保留。
+    log::info!("login.forward_hint_set");
 
     log::info!("login.webview_opened");
 
@@ -3902,7 +3951,9 @@ pub async fn open_login_webview(app: tauri::AppHandle) -> Result<(), String> {
         }
         true
     })
-    .user_agent(LOGIN_WEBVIEW_USER_AGENT);
+    .user_agent(&login_webview_user_agent(
+        tauri::webview_version().ok().as_deref(),
+    ));
     #[cfg(target_os = "android")]
     let login_window = login_window.activity_name("LoginActivity");
     #[cfg(desktop)]
@@ -3989,7 +4040,8 @@ pub async fn open_login_webview(app: tauri::AppHandle) -> Result<(), String> {
 mod login_callback_tests {
     use super::{
         extract_access_code_from_url, extract_callback_param, extract_ck_from_url,
-        login_callback_kind, login_failure_kind, LOGIN_WEBVIEW_USER_AGENT,
+        login_callback_kind, login_failure_kind, login_webview_user_agent,
+        LOGIN_WEBVIEW_UA_FALLBACK,
     };
 
     #[test]
@@ -4078,8 +4130,24 @@ mod login_callback_tests {
 
     #[test]
     fn login_webview_ua_keeps_desktop_mouse_events() {
-        assert!(LOGIN_WEBVIEW_USER_AGENT.contains("Windows NT"));
-        assert!(!LOGIN_WEBVIEW_USER_AGENT.contains("Mobile"));
+        let ua = login_webview_user_agent(Some("155.0.4283.62"));
+        assert!(ua.contains("Windows NT") || ua.contains("Macintosh") || ua.contains("X11"));
+        assert!(!ua.contains("Mobile"));
+        // 主版本号必须跟随真实内核，否则易盾会判定 UA 与浏览器特征不一致。
+        assert!(ua.contains("Chrome/155.0.0.0"));
+    }
+
+    #[test]
+    fn login_webview_ua_falls_back_when_version_is_unusable() {
+        for version in [None, Some(""), Some("abc"), Some(".1"), Some("  ")] {
+            let ua = login_webview_user_agent(version);
+            assert!(ua.contains("Chrome/"), "version={version:?} 应回退到固定 UA");
+            assert!(!ua.contains("Mobile"));
+        }
+        assert_eq!(
+            login_webview_user_agent(None),
+            LOGIN_WEBVIEW_UA_FALLBACK
+        );
     }
 
     #[test]

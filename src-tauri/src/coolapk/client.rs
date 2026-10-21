@@ -271,6 +271,18 @@ pub struct CoolapkClient {
     device_profile: RwLock<DeviceProfile>,
     native_device_profile: DeviceProfile,
     device_code: RwLock<String>,
+    /// 网易易盾验证通过后拿到的凭证，之后每个请求以 Cookie `validate` 携带。
+    verification: RwLock<Option<VerificationProof>>,
+}
+
+/// 一次验证码验证的凭证，与发起验证时的设备码和账号绑定。
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct VerificationProof {
+    /// `NEC:<captchaId 前 8 位>:<validate>` 明文形态，写 Cookie 前再做 URL 编码。
+    token: String,
+    device_code: String,
+    /// 游客态为空串。
+    uid: String,
 }
 
 pub struct ProxiedVideoResponse {
@@ -1111,6 +1123,7 @@ impl CoolapkClient {
             device_profile: RwLock::new(DeviceProfile::default()),
             native_device_profile,
             device_code: RwLock::new(device_code),
+            verification: RwLock::new(None),
         }
     }
 
@@ -1203,13 +1216,91 @@ impl CoolapkClient {
         derive_ddid(&seed)
     }
 
-    /// 给请求 Cookie 补充 ddid。
+    /// 给请求 Cookie 补充 ddid 与验证码凭证。
     ///
     /// 写接口读服务端下发的 `MainInit.useDDIEventList`，只读接口同样需要该字段，
     /// 因此这里不按路径区分，统一附加。
+    ///
+    /// 验证码凭证必须走 Cookie 而不是表单字段：`_v2_post_token` 只有 POST 能携带，
+    /// 而 `replyList`/`detail` 这类被风控的接口是 GET，靠表单字段从原理上带不上。
     fn cookie_for_path(&self, cookie: &str, _path: &str) -> String {
         let ddid = self.ddid_value(cookie);
-        merge_cookie_value(&cookie_without_ddid(cookie), "ddid", &encode_login_cookie_value(&ddid))
+        let merged = merge_cookie_value(
+            &cookie_without_ddid(cookie),
+            "ddid",
+            &encode_login_cookie_value(&ddid),
+        );
+        match self.verification_cookie_value() {
+            Some(value) => merge_cookie_value(&merged, "validate", &value),
+            None => merged,
+        }
+    }
+
+    /// 取出仍与当前设备码和账号绑定的验证码凭证，并转换成 Cookie 需要的编码形态。
+    ///
+    /// 官方 APK 由 `CookieInterceptor.setCookie` 写入，值是 Java `URLEncoder` 规则：
+    /// 空格编成 `+`，`A-Za-z0-9-_.*` 之外的字节百分号转义。
+    fn verification_cookie_value(&self) -> Option<String> {
+        let expected_device = self.device_code.read().ok()?.clone();
+        let expected_uid = self.verification_uid();
+        let proof = self.verification.read().ok()?.clone()?;
+        // 换设备码或换账号后旧凭证不再有效，交给服务端重新下发挑战。
+        if proof.device_code != expected_device || proof.uid != expected_uid {
+            return None;
+        }
+        Some(encode_login_cookie_value(&proof.token))
+    }
+
+    /// 登记一次通过网易易盾验证得到的凭证。
+    ///
+    /// 凭证与发起验证时的设备码、账号绑定，避免切换账号后误用他人凭证。
+    pub fn set_verification_proof(&self, token: &str) -> Result<(), String> {
+        let token = token.trim();
+        if token.is_empty() || token.len() > 8192 {
+            return Err("验证码凭证长度不合法".to_string());
+        }
+        // 只接受 `NEC:<captchaId 前 8 位>:<validate>` 形态，其余一律丢弃。
+        if !token.starts_with("NEC:") || token.contains(';') || !token.bytes().all(|byte| byte.is_ascii_graphic()) {
+            return Err("验证码凭证格式不合法".to_string());
+        }
+        let device_code = self
+            .device_code
+            .read()
+            .map_err(|_| "无法读取设备码".to_string())?
+            .clone();
+        let uid = self.verification_uid();
+        *self
+            .verification
+            .write()
+            .map_err(|_| "无法保存验证码凭证".to_string())? = Some(VerificationProof {
+            token: token.to_string(),
+            device_code,
+            uid,
+        });
+        log::info!("captcha.proof_stored");
+        Ok(())
+    }
+
+    /// 当前登录账号 uid；游客态为空串（游客也能通过验证码解锁只读接口）。
+    fn verification_uid(&self) -> String {
+        self.current_uid()
+            .or_else(|| {
+                self.user_cookie
+                    .read()
+                    .ok()
+                    .and_then(|cookie| cookie.clone())
+                    .and_then(|cookie| cookie_field_value(&cookie, "uid"))
+            })
+            .unwrap_or_default()
+    }
+
+    /// 清空验证码凭证；换账号、退出登录、服务端重新下发挑战时调用。
+    pub fn clear_verification_proof(&self) {
+        if let Ok(mut proof) = self.verification.write() {
+            if proof.take().is_some() {
+                log::info!("captcha.proof_cleared");
+            }
+        }
     }
 
     /// 账号绑定的固定设备码：
@@ -1397,7 +1488,7 @@ impl CoolapkClient {
         let accounts_path = dir.as_ref().map(|d| d.join("accounts.json"));
         if let Some(ap) = accounts_path {
             if let Ok(content) = std::fs::read_to_string(&ap) {
-                if let Ok(root) = serde_json::from_str::<Value>(&content) {
+                if let Some(root) = super::credential_cipher::decode_accounts_root(&content) {
                     let last_uid = root
                         .get("lastLoginUid")
                         .and_then(|v| v.as_str())
@@ -1453,7 +1544,15 @@ impl CoolapkClient {
                     });
                     if let Some(dir) = dir {
                         if let Ok(json_str) = serde_json::to_string_pretty(&root) {
-                            let _ = std::fs::write(dir.join("accounts.json"), json_str);
+                            let target = dir.join("accounts.json");
+                            match super::credential_cipher::seal(&json_str) {
+                                Some(sealed) => {
+                                    let _ = std::fs::write(target, sealed);
+                                }
+                                None => {
+                                    let _ = std::fs::write(target, json_str);
+                                }
+                            }
                         }
                     }
                     if let Ok(mut stored) = self.user_cookie.write() {
@@ -1511,14 +1610,30 @@ impl CoolapkClient {
         };
         std::fs::read_to_string(&path)
             .ok()
-            .and_then(|c| serde_json::from_str::<Value>(&c).ok())
+            .and_then(|stored| super::credential_cipher::decode_accounts_root(&stored))
             .unwrap_or_else(|| json!({ "lastLoginUid": "", "accounts": [] }))
     }
 
     fn save_accounts_root(&self, root: &Value) {
         if let Some(path) = self.accounts_file_path() {
             if let Ok(json) = serde_json::to_string_pretty(root) {
-                let _ = std::fs::write(&path, json);
+                // Cookie 等价于登录态，优先用系统密钥封装后落盘；无系统密钥时退回明文。
+                match super::credential_cipher::seal(&json) {
+                    Some(sealed) => {
+                        if std::fs::write(&path, sealed).is_err() {
+                            log::warn!("accounts.write_failed encrypted=true");
+                        }
+                    }
+                    None => {
+                        // 加密不可用只发生在非 Windows 平台，或系统密钥封装调用失败。
+                        log::warn!(
+                            "accounts.encryption_unavailable platform={} supported={}",
+                            std::env::consts::OS,
+                            super::credential_cipher::is_available()
+                        );
+                        let _ = std::fs::write(&path, json);
+                    }
+                }
             }
         }
     }
@@ -1728,6 +1843,8 @@ impl CoolapkClient {
         drop(stored);
         // 登录态变化（登录/登出/切换账号）后同步设备码
         self.sync_device_code();
+        // 验证码凭证与账号、设备码绑定，身份变化后旧凭证不再适用。
+        self.clear_verification_proof();
         Ok(())
     }
 
@@ -9355,6 +9472,108 @@ mod ddid_cookie_tests {
         assert_eq!(cookie_field_value(cookie, "token").as_deref(), Some("abc123"));
         assert_eq!(cookie_field_value(cookie, "TOKEN").as_deref(), Some("abc123"));
         assert_eq!(cookie_field_value(cookie, "missing"), None);
+    }
+}
+
+#[cfg(test)]
+mod captcha_cookie_tests {
+    use super::{
+        encode_login_cookie_value, merge_cookie_value, CoolapkClient, VerificationProof,
+    };
+
+    const VALID_TOKEN: &str = "NEC:414e5c9b:validate_value";
+
+    /// 每次测试用独立实例，避免共享全局设备码状态。
+    fn client_with_device(device_code: &str) -> CoolapkClient {
+        let client = CoolapkClient::new();
+        *client.device_code.write().unwrap() = device_code.to_string();
+        client
+    }
+
+    #[test]
+    fn accepts_official_captcha_token_shape() {
+        let client = client_with_device("device-a");
+        assert!(client.set_verification_proof(VALID_TOKEN).is_ok());
+        assert_eq!(
+            client.verification_cookie_value().as_deref(),
+            Some(encode_login_cookie_value(VALID_TOKEN).as_str())
+        );
+    }
+
+    /// 云端下发的凭证必须能被 GET 请求携带：`_v2_post_token` 只有 POST 表单可用，
+    /// 而 `replyList`/`detail` 是 GET，所以只能走 Cookie。
+    #[test]
+    fn merges_validate_into_cookie_without_dropping_session() {
+        let client = client_with_device("device-a");
+        client.set_verification_proof(VALID_TOKEN).unwrap();
+        let merged = client.cookie_for_path("SESSID=sample; uid=1", "/v6/feed/replyList");
+        assert!(merged.contains("validate="), "GET 请求必须带 validate Cookie");
+        assert!(merged.contains("SESSID=sample"), "登录态字段不能被覆盖");
+        assert!(merged.contains("ddid="), "ddid 仍要照常附加");
+    }
+
+    #[test]
+    fn drops_proof_after_account_or_device_change() {
+        let client = client_with_device("device-a");
+        client.set_verification_proof(VALID_TOKEN).unwrap();
+        // 换设备码（退出登录、切换账号都会触发）后旧凭证不再适用。
+        *client.device_code.write().unwrap() = "device-b".to_string();
+        assert_eq!(client.verification_cookie_value(), None);
+        let merged = client.cookie_for_path("SESSID=sample", "/v6/feed/replyList");
+        assert!(!merged.contains("validate="), "跨设备码不能复用凭证");
+    }
+
+    #[test]
+    fn rejects_tokens_that_could_break_the_cookie_header() {
+        let client = client_with_device("device-a");
+        for token in ["", "   ", "not-nec", "NEC:aa:bb; uid=1", "NEC:aa:bb\r\nX:1"] {
+            assert!(
+                client.set_verification_proof(token).is_err(),
+                "{token:?} 不应被接受"
+            );
+        }
+        assert_eq!(client.verification_cookie_value(), None);
+    }
+
+    #[test]
+    fn clear_removes_proof_and_cookie_value() {
+        let client = client_with_device("device-a");
+        client.set_verification_proof(VALID_TOKEN).unwrap();
+        client.clear_verification_proof();
+        assert_eq!(client.verification_cookie_value(), None);
+        assert!(!client
+            .cookie_for_path("SESSID=sample", "/v6/feed/replyList")
+            .contains("validate="));
+    }
+
+    /// Cookie 值必须按 Java `URLEncoder` 规则编码：空格成 `+`，`:;` 等字节百分号转义。
+    #[test]
+    fn encodes_token_like_the_official_cookie_interceptor() {
+        assert_eq!(
+            encode_login_cookie_value("NEC:414e5c9b:ab+cd/ef"),
+            "NEC%3A414e5c9b%3Aab%2Bcd%2Fef"
+        );
+        assert_eq!(encode_login_cookie_value("a b"), "a+b");
+    }
+
+    /// 换账号（uid 变化）同样要作废旧凭证，避免把别人的验证结果带过去。
+    #[test]
+    fn proof_is_bound_to_the_uid_it_was_issued_for() {
+        let client = client_with_device("device-a");
+        *client.verification.write().unwrap() = Some(VerificationProof {
+            token: VALID_TOKEN.to_string(),
+            device_code: "device-a".to_string(),
+            uid: "10086".to_string(),
+        });
+        // 游客态 uid 为空，与凭证记录不符 → 不携带。
+        assert_eq!(client.verification_cookie_value(), None);
+    }
+
+    #[test]
+    fn replacing_validate_keeps_single_entry() {
+        let merged = merge_cookie_value("SESSID=s; validate=old; uid=1", "validate", "new");
+        assert_eq!(merged.matches("validate=").count(), 1, "同名 Cookie 不能重复");
+        assert!(merged.contains("validate=new"));
     }
 }
 

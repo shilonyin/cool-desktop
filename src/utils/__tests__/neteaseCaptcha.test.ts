@@ -105,6 +105,32 @@ describe('neteaseCaptcha', () => {
     expect(window.initNECaptcha).toHaveBeenCalledWith(expect.objectContaining({ mode: 'popup', apiVersion: 2 }), expect.any(Function), expect.any(Function));
   });
 
+  it('验证码通过后把凭证登记到后端，供 GET 接口凭 Cookie 通过风控', async () => {
+    const { invoke } = await import('@tauri-apps/api/core');
+    (window as any).initNECaptcha = vi.fn((config, onLoad) => {
+      const mockInstance = { verify: vi.fn(), refresh: vi.fn(), destroy: vi.fn() };
+      if (onLoad) onLoad(mockInstance);
+      config.onVerify?.(null, { validate: 'registry_probe_value' });
+    });
+
+    const token = await verifyWithCaptcha('414e5c9b866a03db03f860a1a9101672');
+
+    expect(token).toBe('NEC:414e5c9b:registry_probe_value');
+    // 登记发生在 resolve 之前，保证调用方随后发起的 GET 请求已带上 Cookie。
+    expect(invoke).toHaveBeenCalledWith('set_captcha_proof', { token: 'NEC:414e5c9b:registry_probe_value' });
+  });
+
+  it('用户取消验证时不登记任何凭证', async () => {
+    const { invoke } = await import('@tauri-apps/api/core');
+    vi.mocked(invoke).mockClear();
+    (window as any).initNECaptcha = vi.fn((config) => {
+      config.onClose?.();
+    });
+
+    await expect(verifyWithCaptcha('414e5c9b866a03db03f860a1a9101672')).rejects.toThrow();
+    expect(invoke).not.toHaveBeenCalledWith('set_captcha_proof', expect.anything());
+  });
+
   it('rejects on user cancellation or verify error', async () => {
     (window as any).initNECaptcha = vi.fn((config, onLoad) => {
       const mockInstance = {
