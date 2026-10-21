@@ -3,7 +3,124 @@ import type { UpdateChannel } from '../types/settings';
 import { getPlatformInfo, type PlatformInfo } from './platform';
 
 export { APP_VERSION };
-const RELEASES_URL = 'https://api.github.com/repos/daimiaopeng/coolapk-desktop/releases';
+
+/** 更新检查的来源仓库，按顺序尝试。上游已停止维护，优先检查本分支的 fork。 */
+export const UPDATE_REPOS = ['shilonyin/cool-desktop', 'daimiaopeng/coolapk-desktop'];
+
+/** fork 可能还没发布过 release，也没有社区数据；这类展示仍读上游仓库。 */
+const UPSTREAM_REPO = UPDATE_REPOS[UPDATE_REPOS.length - 1];
+
+/**
+ * GitHub API 取址顺序：直连优先，失败后回退镜像。
+ *
+ * 匿名请求的配额按出口 IP 计算（每小时 60 次），同一网络下的浏览器、其他工具和
+ * 本应用共用这份配额，启动顺手检查几次就可能撞上 `HTTP 403 rate limit exceeded`。
+ * 镜像由第三方服务器向 GitHub 发起请求，出口 IP 与本地不同，因此能绕开配额耗尽。
+ * 镜像返回的同样是 GitHub API 的原始 JSON，响应结构完全一致。
+ */
+const API_ORIGINS = ['https://api.github.com', 'https://gh-proxy.com/https://api.github.com'];
+
+const releasesPath = (repo: string) => `/repos/${repo}/releases`;
+
+const RELEASES_PAGE = `https://github.com/${UPSTREAM_REPO}/releases`;
+
+/**
+ * 更新日志与发布页缺省指向。
+ *
+ * fork 的 `releases` 目前是空数组，指向它只会打开一个没有任何版本的页面；
+ * 实际的分发仍在上游仓库，所以兜底沿用上游发布页。
+ */
+export function updateReleasePageUrl(): string {
+  return RELEASES_PAGE;
+}
+
+type ReleaseResponse = { ok: boolean; status: number; data?: any };
+
+/**
+ * 按 API_ORIGINS 顺序请求同一个 GitHub API 路径，返回第一个成功的响应。
+ *
+ * 只有 404 会立即返回：它表示"该仓库确实没有这份资源"，换来源答案一样。
+ * 其余失败（403 配额、5xx、网络不可达）都继续尝试下一个来源。
+ */
+async function fetchReleaseApi(path: string): Promise<ReleaseResponse> {
+  let lastStatus = 0;
+  for (const origin of API_ORIGINS) {
+    try {
+      const response = await fetch(`${origin}${path}`, {
+        headers: { Accept: 'application/vnd.github.v3+json' },
+      });
+      if (response.ok) return { ok: true, status: response.status, data: await response.json() };
+      lastStatus = response.status;
+      if (response.status === 404) return { ok: false, status: 404 };
+    } catch {
+      // 网络不可达：继续尝试下一个来源。
+    }
+  }
+  return { ok: false, status: lastStatus };
+}
+
+/**
+ * 读取仓库概况（星标/分支/issue 数），供设置页展示。
+ *
+ * 与更新检查共用同一套来源回退，避免额外打满匿名配额；失败时返回 undefined，
+ * 调用方据此隐藏该行即可。
+ *
+ * 默认读上游仓库：本分支的 fork 是新建的转发仓库，社区数据全是 0，
+ * 展示出来只会让人以为请求失败。
+ */
+export async function fetchRepoStats(repo = UPSTREAM_REPO): Promise<any | undefined> {
+  const response = await fetchReleaseApi(`/repos/${repo}`);
+  return response.ok ? response.data : undefined;
+}
+
+/**
+ * 依次向候选仓库请求 `latest`，返回第一个有发布的仓库。
+ *
+ * 本分支的 fork 可能还没发布过 release（`releases` 返回空数组，`latest` 返回 404）。
+ * 这种情况下回退到上游仓库，让更新检查保持可用；等 fork 发布了自己的版本后，
+ * 会自动优先采用 fork 的版本。
+ */
+async function fetchLatestRelease(): Promise<ReleaseResponse> {
+  let last: ReleaseResponse = { ok: false, status: 0 };
+  for (const repo of UPDATE_REPOS) {
+    last = await fetchReleaseApi(`${releasesPath(repo)}/latest`);
+    if (last.ok) return last;
+    // 配额或网络错误说明排除掉这个仓库也没用，直接上报。
+    if (last.status !== 404) return last;
+  }
+  return last;
+}
+
+/**
+ * 读取某个版本的完整发布信息（更新日志、发布日期、页面链接）。
+ *
+ * 同样按仓库顺序尝试：fork 的发布列表可能为空，此时标签也只存在于上游。
+ */
+async function fetchReleaseByTag(tag: string): Promise<ReleaseResponse> {
+  let last: ReleaseResponse = { ok: false, status: 0 };
+  for (const repo of UPDATE_REPOS) {
+    last = await fetchReleaseApi(`${releasesPath(repo)}/tags/${tag}`);
+    if (last.ok) return last;
+    if (last.status !== 404) return last;
+  }
+  return last;
+}
+
+/**
+ * 读取发布列表，返回第一个非空的仓库结果。
+ *
+ * 空数组不算成功：fork 继承了上游的标签但没有任何 release，
+ * 用它裁剪渠道列表会把历史版本全部丢掉。
+ */
+async function fetchReleaseList(): Promise<ReleaseResponse> {
+  let last: ReleaseResponse = { ok: false, status: 0 };
+  for (const repo of UPDATE_REPOS) {
+    last = await fetchReleaseApi(`${releasesPath(repo)}?per_page=100`);
+    if (last.ok && Array.isArray(last.data) && last.data.length) return last;
+    if (!last.ok && last.status !== 404) return last;
+  }
+  return last;
+}
 
 export type UpdateInfo = {
   hasNew: boolean;
@@ -182,25 +299,23 @@ export function isVersionAllowedInChannel(version: string, channel: UpdateChanne
 }
 
 async function pickRelease(channel: UpdateChannel, platform: PlatformInfo, packageType: UpdatePackageType): Promise<any> {
-  const headers = { Accept: 'application/vnd.github.v3+json' };
   if (channel === 'beta') {
     // 稳定版单独读取，避免大量测试版挤出列表窗口。
-    const response = await fetch(`${RELEASES_URL}?per_page=100`, { headers });
-    if (!response.ok) throw new Error(`GitHub API HTTP ${response.status}`);
-    const releases = await response.json();
-    if (!Array.isArray(releases)) throw new Error('发布列表格式无效');
-    const stableResponse = await fetch(`${RELEASES_URL}/latest`, { headers });
-    if (stableResponse.ok) releases.push(await stableResponse.json());
-    else if (stableResponse.status !== 404) throw new Error(`GitHub API HTTP ${stableResponse.status}`);
+    const page = await fetchReleaseList();
+    if (!page.ok || !Array.isArray(page.data)) throw new Error(`GitHub API HTTP ${page.status || 'unreachable'}`);
+    const releases = page.data;
+    const stable = await fetchLatestRelease();
+    if (stable.ok) releases.push(stable.data);
+    else if (stable.status !== 404) throw new Error(`GitHub API HTTP ${stable.status}`);
     const candidates = releases.filter((release) => !release.draft && normalizeVersion(release.tag_name)
       && (!release.prerelease || /^v?\d+\.\d+\.\d+-beta\.[1-9]\d*$/.test(release.tag_name)));
     candidates.sort((a, b) => isNewerVersion(a.tag_name, b.tag_name) ? -1 : isNewerVersion(b.tag_name, a.tag_name) ? 1 : 0);
     if (!candidates.length) throw new Error('未获取到任何发布版本');
     return candidates.find((release) => selectReleaseAsset(release, platform, packageType)) || candidates[0];
   }
-  const response = await fetch(`${RELEASES_URL}/latest`, { headers });
-  if (!response.ok) throw new Error(`GitHub API HTTP ${response.status}`);
-  const release = await response.json();
+  const response = await fetchLatestRelease();
+  if (!response.ok) throw new Error(`GitHub API HTTP ${response.status || 'unreachable'}`);
+  const release = response.data;
   if (release.draft || release.prerelease || !isVersionAllowedInChannel(release.tag_name, 'stable')) {
     throw new Error('稳定版发布信息无效');
   }
@@ -289,9 +404,9 @@ export async function checkLatestRelease(
   if (!hasNew && normalizeVersion(tagName) !== normalizeVersion(APP_VERSION)) {
     notesRelease = null;
     try {
-      const response = await fetch(`${RELEASES_URL}/tags/v${encodeURIComponent(APP_VERSION)}`, { headers: { Accept: 'application/vnd.github.v3+json' } });
+      const response = await fetchReleaseByTag(`v${encodeURIComponent(APP_VERSION)}`);
       if (response.ok) {
-        const currentRelease = await response.json();
+        const currentRelease = response.data;
         if (!currentRelease.draft && normalizeVersion(currentRelease.tag_name) === normalizeVersion(APP_VERSION)) notesRelease = currentRelease;
       }
     } catch {
@@ -309,7 +424,7 @@ export async function checkLatestRelease(
     latestVersion: tagName || '最新发布',
     releaseNotes,
     publishedAt,
-    downloadUrl: notesRelease?.html_url || 'https://github.com/daimiaopeng/coolapk-desktop/releases',
+    downloadUrl: notesRelease?.html_url || RELEASES_PAGE,
     installerUrl,
     installerName: selectedAsset?.name,
     packageType,

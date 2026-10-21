@@ -189,6 +189,7 @@ import {
   versionFromAssetName,
   type UpdateInfo,
   type UpdatePackageType,
+  updateReleasePageUrl,
 } from './utils/updateChecker';
 import { renderReleaseMarkdown } from './utils/markdown';
 import { handleAnchorClick } from './utils/anchorClick';
@@ -366,7 +367,7 @@ async function checkForUpdate(manual = false) {
     updateInfo.value = {
       hasNew: false,
       releaseNotes: '检查更新失败，请检查网络连接后重试。',
-      downloadUrl: 'https://github.com/daimiaopeng/coolapk-desktop/releases',
+      downloadUrl: updateReleasePageUrl(),
     };
   }
 }
@@ -527,7 +528,7 @@ function openUpdate() {
 }
 
 function openReleasePage() {
-  const url = updateInfo.value?.downloadUrl || 'https://github.com/daimiaopeng/coolapk-desktop/releases';
+  const url = updateInfo.value?.downloadUrl || updateReleasePageUrl();
   void CoolapkTauriAPI.openUrl(url, 'system');
 }
 

@@ -168,7 +168,9 @@ const defaultSettings: AppSettings = {
   cachePath: '',
   imageQuality: 'hd',
   navVisibility: { ...defaultNavVisibility },
-  checkUpdateOnStartup: true,
+  // GitHub 匿名 API 配额按出口 IP 计（每小时 60 次），与同网络下的浏览器和其他工具共用。
+  // 每次启动就去检查很容易在配额耗尽时直接失败，所以默认改为只在手动点击时检查。
+  checkUpdateOnStartup: false,
   ignoredUpdateVersion: '',
   ignoreAllUpdates: false,
   closeToTray: false,

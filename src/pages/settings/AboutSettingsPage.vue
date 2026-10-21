@@ -134,6 +134,7 @@ import { useAuthStore } from '../../stores/auth';
 import AppButton from '../../components/common/AppButton.vue';
 import AppIconButton from '../../components/common/AppIconButton.vue';
 import { openFeedbackMessage } from '../../utils/feedback';
+import { fetchRepoStats } from '../../utils/updateChecker';
 
 const router = useRouter();
 const authStore = useAuthStore();
@@ -167,22 +168,17 @@ function checkUpdate() {
 }
 
 onMounted(() => {
-  fetch('https://api.github.com/repos/daimiaopeng/coolapk-desktop', {
-    headers: { Accept: 'application/vnd.github.v3+json' },
-  })
-    .then((res) => (res.ok ? res.json() : null))
-    .then((data: any) => {
-      if (data && typeof data.stargazers_count === 'number') {
-        repoStats.value = {
-          stars: data.stargazers_count,
-          forks: data.forks_count ?? 0,
-          issues: data.open_issues_count ?? 0,
-        };
-      }
-    })
-    .catch(() => {
-      // 网络不可用时隐藏社区数据行
-    });
+  void (async () => {
+    // 与更新检查共用来源回退，避免额外打满 GitHub 匿名配额。
+    const data = await fetchRepoStats();
+    if (data && typeof data.stargazers_count === 'number') {
+      repoStats.value = {
+        stars: data.stargazers_count,
+        forks: data.forks_count ?? 0,
+        issues: data.open_issues_count ?? 0,
+      };
+    }
+  })();
 });
 </script>
 

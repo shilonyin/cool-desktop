@@ -9,6 +9,7 @@ import {
   selectPortableAsset,
   shouldReplaceDownloadedUpdate,
   versionFromAssetName,
+  fetchRepoStats,
 } from '../updateChecker';
 
 // 固定正式版测试环境，避免 CI 注入测试版版本号后将稳定版响应误构造成预发布版本。
@@ -251,6 +252,145 @@ describe('updateChecker', () => {
       expect(info.hasNew).toBe(false);
       expect(info.releaseNotes).toBe('暂无当前版本的更新日志。');
       expect(info.publishedAt).toBeUndefined();
+    });
+  });
+
+  describe('发布来源回退', () => {
+    const release = {
+      tag_name: 'v9.9.9',
+      assets: [
+        {
+          name: 'coolapk-desktop_9.9.9_x64-setup.exe',
+          browser_download_url: 'https://github.com/download/coolapk-desktop_9.9.9_x64-setup.exe',
+        },
+      ],
+    };
+
+    /** 构造只对指定前缀成功的 fetch 替身，同时记录被请求的 URL 顺序。 */
+    function mockSources(routes: Array<[string, () => Response]>) {
+      const seen: string[] = [];
+      vi.spyOn(globalThis, 'fetch').mockImplementation((async (input: any) => {
+        const url = String(input);
+        seen.push(url);
+        for (const [prefix, make] of routes) {
+          if (url.startsWith(prefix)) return make();
+        }
+        throw new TypeError('Failed to fetch');
+      }) as typeof fetch);
+      return seen;
+    }
+
+    const ok = (data: any) => ({ ok: true, status: 200, json: async () => data } as Response);
+    const fail = (status: number) => ({ ok: false, status, json: async () => ({}) } as Response);
+
+    it('直连配额耗尽时回退镜像，匿名 403 不再是致命错误', async () => {
+      // 这正是启动时看到的现象：api.github.com 返回 403 rate limit exceeded。
+      const seen = mockSources([
+        ['https://api.github.com', () => fail(403)],
+        ['https://gh-proxy.com/', () => ok(release)],
+      ]);
+
+      const info = await checkLatestRelease('stable', { os: 'windows', arch: 'x86_64' });
+      expect(info.hasNew).toBe(true);
+      expect(info.latestVersion).toBe('v9.9.9');
+      expect(seen.some((url) => url.startsWith('https://gh-proxy.com/'))).toBe(true);
+    });
+
+    it('fork 尚未发布时回退上游仓库，避免更新检查整体失效', async () => {
+      // shilonyin/cool-desktop 的 releases 目前是空数组，latest 返回 404。
+      const seen = mockSources([
+        ['https://api.github.com/repos/shilonyin/cool-desktop/releases', () => fail(404)],
+        ['https://api.github.com/repos/daimiaopeng/coolapk-desktop/releases', () => ok(release)],
+      ]);
+
+      const info = await checkLatestRelease('stable', { os: 'windows', arch: 'x86_64' });
+      expect(info.latestVersion).toBe('v9.9.9');
+      expect(seen[0]).toContain('shilonyin/cool-desktop');
+      expect(seen.some((url) => url.includes('daimiaopeng/coolapk-desktop'))).toBe(true);
+    });
+
+    it('两个来源都失败时抛出错误，交给上层记为 check_failed', async () => {
+      mockSources([
+        ['https://api.github.com', () => fail(403)],
+        ['https://gh-proxy.com/', () => fail(503)],
+      ]);
+
+      await expect(checkLatestRelease('stable', { os: 'windows', arch: 'x86_64' }))
+        .rejects.toThrow(/GitHub API HTTP/);
+    });
+
+    it('404 不重试镜像，因为换来源答案一样', async () => {
+      const seen = mockSources([['https://api.github.com', () => fail(404)]]);
+
+      await expect(checkLatestRelease('stable', { os: 'windows', arch: 'x86_64' }))
+        .rejects.toThrow(/404/);
+      expect(seen.every((url) => url.startsWith('https://api.github.com'))).toBe(true);
+    });
+
+    it('fork 的 releases 是空数组时回退上游，不把历史渠道版本清空', async () => {
+      // fork 继承了标签但没有任何 release：`?per_page=100` 返回 []，
+      // 若把它当作成功结果，beta 渠道会一条候选都拿不到。
+      const betaRelease = { tag_name: 'v9.9.9-beta.1', prerelease: true, assets: [] };
+      mockSources([
+        [
+          'https://api.github.com/repos/shilonyin/cool-desktop/releases?per_page=100',
+          () => ok([]),
+        ],
+        [
+          'https://api.github.com/repos/daimiaopeng/coolapk-desktop/releases?per_page=100',
+          () => ok([betaRelease]),
+        ],
+        ['https://api.github.com/repos/shilonyin/cool-desktop/releases/latest', () => fail(404)],
+        [
+          'https://api.github.com/repos/daimiaopeng/coolapk-desktop/releases/latest',
+          // 稳定版 latest 比测试版旧，排序后应保留测试版候选。
+          () => ok({ tag_name: 'v9.9.8', assets: [] }),
+        ],
+      ]);
+
+      const info = await checkLatestRelease('beta', { os: 'windows', arch: 'x86_64' });
+      expect(info.latestVersion).toBe('v9.9.9-beta.1');
+    });
+
+    it('渠道版本比已装版本旧时，按仓库顺序读取当前版本 tag 详情', async () => {
+      // 已装版本等于渠道最新版时不会走这里；只有渠道最新版更旧才需要回头读已装版本。
+      const currentRelease = {
+        tag_name: `v${APP_VERSION}`,
+        body: '当前版本的更新日志',
+        published_at: '2026-10-15T03:00:00Z',
+        html_url: `https://github.com/daimiaopeng/coolapk-desktop/releases/tag/v${APP_VERSION}`,
+      };
+      mockSources([
+        ['https://api.github.com/repos/shilonyin/cool-desktop/releases/latest', () => ok({ tag_name: 'v1.0.0', assets: [] })],
+        [
+          `https://api.github.com/repos/shilonyin/cool-desktop/releases/tags/v${APP_VERSION}`,
+          () => fail(404),
+        ],
+        [
+          `https://api.github.com/repos/daimiaopeng/coolapk-desktop/releases/tags/v${APP_VERSION}`,
+          () => ok(currentRelease),
+        ],
+      ]);
+
+      const info = await checkLatestRelease('stable', { os: 'windows', arch: 'x86_64' });
+      expect(info.hasNew).toBe(false);
+      expect(info.releaseNotes).toBe('当前版本的更新日志');
+      expect(info.downloadUrl).toContain('daimiaopeng/coolapk-desktop');
+      expect(info.publishedAt).toBeTruthy();
+    });
+  });
+
+  describe('社区数据展示', () => {
+    it('默认读上游仓库，避免展示 fork 的全零数据', async () => {
+      const seen: string[] = [];
+      vi.spyOn(globalThis, 'fetch').mockImplementation((async (input: any) => {
+        seen.push(String(input));
+        return { ok: true, status: 200, json: async () => ({ stargazers_count: 1, forks_count: 2, open_issues_count: 3 }) } as Response;
+      }) as typeof fetch);
+
+      const stats = await fetchRepoStats();
+      expect(stats.stargazers_count).toBe(1);
+      expect(seen[0]).toContain('daimiaopeng/coolapk-desktop');
     });
   });
 
