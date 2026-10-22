@@ -47,6 +47,8 @@
       </div>
     </div>
     <MobileBottomNav v-if="showMobileBottomNav" :inert="reading.hidden.value || undefined" :aria-hidden="reading.hidden.value || undefined" />
+    <!-- 移动布局沿用官方 APK 的顶栏与底栏，不额外注入桌面端页面操作浮层。 -->
+    <FloatingPageActions v-if="!mobileLayout" />
   </div>
 </template>
 
@@ -63,6 +65,7 @@ import MainSidebar from './MainSidebar.vue';
 import NetworkStatusBanner from '../common/NetworkStatusBanner.vue';
 import MobileTopBar from './MobileTopBar.vue';
 import MobileBottomNav from './MobileBottomNav.vue';
+import FloatingPageActions from './FloatingPageActions.vue';
 import PageTabBar from './PageTabBar.vue';
 import { useAndroidBackButton } from '../../utils/androidBackButton';
 import { createAndroidRootBackHandler } from '../../utils/androidRootBack';

@@ -399,6 +399,7 @@ import {
 import { getUserUid } from '../../utils/userRoute';
 import { getFeedInteractionType } from '../../utils/feedInteractions';
 import { hasActiveTextSelection } from '../../utils/selection';
+import { FLOATING_ACTIONS_LAYOUT } from '../../utils/floatingActionsLayout';
 import { queueFavoriteContentIndexEntry, removeFavoriteContentIndexEntry } from '../../utils/favoriteContentIndex';
 
 const settingsStore = useSettingsStore();
@@ -1304,12 +1305,16 @@ function updateFloatingCollapse() {
 
   if (isInViewport) {
     isCommentsFloatingVisible.value = true;
-    // 水平对齐到卡片右内侧边缘，当卡片靠右（rightOffset < 96px）时进入右下角回到顶部悬浮球区域，
-    // 将收起评论按钮上移到回到顶部上方（bottom: 84px），防止两按钮重叠冲突；空间充足时固定在底部 32px
+    // 水平对齐到卡片右内侧边缘；当卡片靠右进入右下角页面操作浮层（刷新 / 回到顶部）区域时，
+    // 收起评论按钮上移到浮层顶部以上，防止两个按钮组重叠冲突；空间充足时固定在底部 32px。
     const rightOffset = Math.max(28, windowWidth - rect.right + 24);
-    const isOverlappingFabZone = rightOffset < 96;
+    const fab = document.querySelector<HTMLElement>('.floating-page-actions')?.getBoundingClientRect();
+    // 优先依据浮层实际位置避让，移动端底栏抬高时也能正确让位；测不到时退回布局常量。
+    const fabLeft = fab && fab.width > 0 ? fab.left : windowWidth - FLOATING_ACTIONS_LAYOUT.overlapThresholdPx;
+    const fabAvoidBottom = fab && fab.height > 0 ? windowHeight - fab.top + 8 : FLOATING_ACTIONS_LAYOUT.avoidBottomPx;
+    const isOverlappingFabZone = rect.right > fabLeft - 12;
     floatingCollapseStyle.value = {
-      bottom: isOverlappingFabZone ? '84px' : '32px',
+      bottom: isOverlappingFabZone ? `${Math.round(fabAvoidBottom)}px` : '32px',
       right: `${rightOffset}px`,
     };
   } else {

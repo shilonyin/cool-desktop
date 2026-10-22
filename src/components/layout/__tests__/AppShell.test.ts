@@ -272,6 +272,31 @@ describe('AppShell', () => {
     wrapper.unmount();
   });
 
+  it('桌面布局渲染右下角页面操作浮层，移动布局不渲染', async () => {
+    const previousWidth = window.innerWidth;
+    Object.defineProperty(window, 'innerWidth', { value: 1280, configurable: true, writable: true });
+    const desktop = mount(AppShell, {
+      global: { stubs: { TopBar: TopBarStub, MainSidebar: MainSidebarStub,
+        PageTabBar: PageTabBarStub, NetworkStatusBanner: NetworkStatusBannerStub,
+        MobileTopBar: MobileTopBarStub, MobileBottomNav: MobileBottomNavStub } },
+    });
+    await nextTick();
+    expect(desktop.find('.floating-page-actions').exists()).toBe(true);
+    desktop.unmount();
+
+    Object.defineProperty(window, 'innerWidth', { value: 390, configurable: true, writable: true });
+    const mobile = mount(AppShell, {
+      global: { stubs: { TopBar: TopBarStub, MainSidebar: MainSidebarStub,
+        PageTabBar: PageTabBarStub, NetworkStatusBanner: NetworkStatusBannerStub,
+        MobileTopBar: MobileTopBarStub, MobileBottomNav: MobileBottomNavStub } },
+    });
+    await nextTick();
+    expect(mobile.find('.floating-page-actions').exists()).toBe(false);
+    mobile.unmount();
+
+    Object.defineProperty(window, 'innerWidth', { value: previousWidth, configurable: true, writable: true });
+  });
+
   it('默认状态下渲染移动端顶栏和底栏，且不包含 prevent-mobile-layout 类名', () => {
     const wrapper = mount(AppShell, {
       global: {

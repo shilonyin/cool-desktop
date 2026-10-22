@@ -900,7 +900,7 @@ describe('评论区收起定位', () => {
     wrapper.unmount(); host.remove();
   });
 
-  it('当卡片靠近屏幕右侧时悬浮收起评论按钮自动上移避让回到顶部按钮', async () => {
+  it('当卡片靠近屏幕右侧时悬浮收起评论按钮自动上移避让右下角页面操作浮层', async () => {
     const host = document.createElement('div');
     host.className = 'feed-scroll-container';
     document.body.appendChild(host);
@@ -924,7 +924,7 @@ describe('评论区收起定位', () => {
       return makeRect(0);
     });
 
-    // 模拟窗口宽度 1000px，卡片右边缘在 980px（距离右边缘 20px，加上 24px 后 rightOffset = 44px < 96px）
+    // 模拟窗口宽度 1000px，卡片右边缘在 980px（距离右边缘 20px，加上 24px 后 rightOffset = 44px，进入右下角浮层区域）
     Object.defineProperty(window, 'innerWidth', { value: 1000, writable: true, configurable: true });
     Object.defineProperty(window, 'innerHeight', { value: 800, writable: true, configurable: true });
 
@@ -963,10 +963,10 @@ describe('评论区收起定位', () => {
 
     const floatingContainer = document.body.querySelector<HTMLElement>('.global-floating-comment-collapse');
     expect(floatingContainer).not.toBeNull();
-    // 应该避让到 84px
-    expect(floatingContainer?.style.bottom).toBe('84px');
+    // 应避让到右下角浮层（刷新 + 回到顶部两个 44px 圆钮、间距 8px、距底 24px）之上
+    expect(floatingContainer?.style.bottom).toBe('128px');
 
-    // 模拟窗口宽度变宽为 1400px，卡片右边缘在 1000px（距离右边缘 400px，rightOffset = 424px >= 96px）
+    // 模拟窗口宽度变宽为 1400px，卡片右边缘在 1000px（距离右边缘 400px，rightOffset = 424px，不进入浮层区域）
     cardRight = 1000;
     Object.defineProperty(window, 'innerWidth', { value: 1400, writable: true, configurable: true });
     window.dispatchEvent(new Event('resize'));

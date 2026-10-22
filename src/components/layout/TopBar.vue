@@ -40,16 +40,6 @@
           :disabled="!canGoForward"
           @click="goForward"
         />
-        <AppIconButton
-          icon="fas fa-rotate-right"
-          title="刷新当前页面"
-          aria-label="刷新当前页面"
-          size="sm"
-          @click="refreshPage"
-        />
-        <span class="back-to-top-control">
-          <BackToTop variant="nav" />
-        </span>
       </div>
       <div class="search-input-wrapper" @click="appStore.openSearch">
         <i class="fas fa-search search-icon"></i>
@@ -329,7 +319,6 @@ import { useRoute, useRouter } from 'vue-router';
 import { useAppStore } from '../../stores/app';
 import { useAuthStore } from '../../stores/auth';
 import { useNotificationStore } from '../../stores/notifications';
-import { usePageTabsStore } from '../../stores/pageTabs';
 import { useSettingsStore } from '../../stores/settings';
 import { CoolapkTauriAPI } from '../../api/coolapk';
 import { androidNotificationContent } from '../../utils/androidNotificationContent';
@@ -360,19 +349,16 @@ import {
 import AppButton from '../common/AppButton.vue';
 import AppIconButton from '../common/AppIconButton.vue';
 import AppAvatar from '../common/AppAvatar.vue';
-import BackToTop from '../common/BackToTop.vue';
 import WindowControls from './WindowControls.vue';
 import { usePlatformShortcuts } from '../../utils/shortcuts';
 import { useShortcutHints } from '../../composables/useShortcutHints';
 import { useDesktopWindow } from '../../composables/useDesktopWindow';
-import { refreshPageTabGeneration } from '../../utils/pageTabs';
 
 const router = useRouter();
 const route = useRoute();
 const appStore = useAppStore();
 const authStore = useAuthStore();
 const notificationStore = useNotificationStore();
-const pageTabsStore = usePageTabsStore();
 const settingsStore = useSettingsStore();
 const { formatShortcut } = usePlatformShortcuts();
 const showShortcutHints = useShortcutHints();
@@ -403,10 +389,6 @@ function goBack() {
 
 function goForward() {
   navigateForward(router);
-}
-
-function refreshPage() {
-  refreshPageTabGeneration(pageTabsStore.tabs, route);
 }
 
 const NOTIFICATION_POLL_MIN_INTERVAL_MS = 60 * 1000;
@@ -1455,10 +1437,6 @@ function handleUserClick() {
 
 @media (max-width: 800px) {
   .shortcut-kbd {
-    display: none;
-  }
-
-  .back-to-top-control {
     display: none;
   }
 
