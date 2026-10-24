@@ -46,14 +46,16 @@
         <span class="placeholder-text">搜索应用、动态、用户、话题</span>
         <kbd v-if="showShortcutHints" class="shortcut-kbd">{{ formatShortcut('Ctrl+K') }}</kbd>
       </div>
-      <AppIconButton
-        :icon="isDark ? 'fas fa-sun' : 'fas fa-moon'"
-        :title="isDark ? '切换日间模式' : '切换夜间模式'"
-        :aria-label="isDark ? '切换日间模式' : '切换夜间模式'"
-        size="sm"
-        class="theme-toggle-icon-btn"
-        @click="toggleTheme"
-      />
+      <div class="theme-toggle-slot">
+        <AppIconButton
+          :icon="isDark ? 'fas fa-sun' : 'fas fa-moon'"
+          :title="isDark ? '切换日间模式' : '切换夜间模式'"
+          :aria-label="isDark ? '切换日间模式' : '切换夜间模式'"
+          size="sm"
+          class="theme-toggle-icon-btn"
+          @click="toggleTheme"
+        />
+      </div>
     </div>
 
     <div class="top-bar-right" data-tauri-drag-region="false">
@@ -1151,13 +1153,23 @@ function handleUserClick() {
   overflow: hidden;
 }
 
+/*
+ * 右侧与左侧导航区等宽（62px），两侧内容都贴近搜索框对齐。
+ * 左组是 62px 的双箭头、右组是 28px 的单个图标，若把图标居中到 62px 槽位里，
+ * 它与搜索框的间距会比左侧大 17px，看起来仍然偏；靠内侧对齐后两侧间距相等，
+ * 多出的宽度作为外侧留白，整组视觉重心与搜索框同时落在窗口中心。
+ */
+.theme-toggle-slot {
+  flex: 0 0 62px;
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+}
+
 .theme-toggle-icon-btn {
   flex-shrink: 0;
   color: var(--text-secondary);
   transition: all var(--duration-fast) var(--ease-default);
-  /* 左侧导航区比这个单独图标宽 34px（62px 对 28px），补上等宽留白后
-     搜索框才落在窗口正中心，而不是被左侧按钮挤偏。 */
-  margin-right: 34px;
 }
 
 .theme-toggle-icon-btn:hover {
@@ -1484,6 +1496,11 @@ function handleUserClick() {
 }
 
 @media (max-width: 560px) {
+  /* 图标隐藏后槽位若仍保留 62px，会白白占走宽度并把搜索框挤偏，这里一并收起。 */
+  .theme-toggle-slot {
+    display: none;
+  }
+
   .theme-toggle-icon-btn,
   .message-wrapper,
   .publish-action {
