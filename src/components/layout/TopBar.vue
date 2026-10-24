@@ -1095,23 +1095,35 @@ function handleUserClick() {
   display: none;
 }
 
+/*
+ * 以窗口为基准水平居中，而不是跟在品牌区之后靠左堆叠。
+ * 绝对定位脱离文档流后，左右两侧不会再互相挤压；宽度用 calc 扣掉
+ * 品牌区与右侧操作区所需空间，窄窗口下中间区收缩而不会与按钮重叠。
+ */
 .top-bar-center {
-  flex: 0 1 640px;
-  min-width: 0;
+  position: absolute;
+  top: 0;
+  left: 50%;
+  width: max(160px, min(640px, calc(100% - 420px)));
+  height: 100%;
+  transform: translateX(-50%);
   display: flex;
   align-items: center;
+  justify-content: center;
   gap: var(--space-2);
   overflow: hidden;
 }
 
 .top-bar.is-macos .top-bar-center {
-  flex-basis: 620px;
+  width: max(160px, min(620px, calc(100% - 480px)));
 }
 
+/* 中间区脱离文档流后，由右侧操作区的自动外边距把它顶到窗口右边缘。 */
+/* 顶部拖拽热区：header 已有 data-tauri-drag-region="deep"，这里只保留窗口按钮前的固定留白。 */
 .titlebar-drag-spacer {
   align-self: stretch;
-  flex: 1 1 40px;
-  min-width: var(--space-2);
+  flex: 0 0 var(--space-2);
+  min-width: var(--space-1);
 }
 
 .global-navigation {
@@ -1124,8 +1136,9 @@ function handleUserClick() {
 }
 
 .search-input-wrapper {
-  flex: 1 1 260px;
+  flex: 0 1 440px;
   min-width: 88px;
+  max-width: 440px;
   display: flex;
   align-items: center;
   height: 38px;
@@ -1142,6 +1155,9 @@ function handleUserClick() {
   flex-shrink: 0;
   color: var(--text-secondary);
   transition: all var(--duration-fast) var(--ease-default);
+  /* 左侧导航区比这个单独图标宽 34px（62px 对 28px），补上等宽留白后
+     搜索框才落在窗口正中心，而不是被左侧按钮挤偏。 */
+  margin-right: 34px;
 }
 
 .theme-toggle-icon-btn:hover {
@@ -1200,7 +1216,7 @@ function handleUserClick() {
   align-items: center;
   gap: var(--space-2);
   flex-shrink: 0;
-  margin-left: var(--space-2);
+  margin-left: auto;
   margin-right: var(--space-4);
 }
 
@@ -1413,20 +1429,16 @@ function handleUserClick() {
     display: none;
   }
 
-  .top-bar-center {
-    flex-basis: 520px;
-  }
-
-  .placeholder-text {
-    display: none;
-  }
-
+  /* 中间区用 calc 动态收缩宽度，窄窗口也不再退回弹性布局，
+     这样在任何窗口宽度下搜索框都严格对齐窗口水平中心。 */
   .search-icon {
     margin-right: 0;
   }
 
   .search-input-wrapper {
-    flex-basis: 120px;
+    /* 中间区宽度已由 calc 收窄，搜索框改为吃满剩余空间，
+       避免窄窗口下被压成只剩一个图标。 */
+    flex: 1 1 120px;
     padding: 0 var(--space-3);
   }
 
@@ -1446,7 +1458,8 @@ function handleUserClick() {
 
   .top-bar-right {
     gap: var(--space-1);
-    margin-left: var(--space-1);
+    /* 中间区是绝对定位，靠这里推右侧操作区贴住窗口右边缘。 */
+    margin-left: auto;
     margin-right: var(--space-2);
   }
 
