@@ -313,7 +313,7 @@ jobs:
         if: ${{ runner.os == 'Linux' && startsWith(github.ref, 'refs/tags/v') }}
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release upload "$GITHUB_REF_NAME" src-tauri/target/release/bundle/appimage/*.AppImage --repo "$GITHUB_REPOSITORY"
+        run: gh release upload "$GITHUB_REF_NAME" src-tauri/target/release/bundle/appimage/*.AppImage --repo "$GITHUB_REPOSITORY" --clobber
 
       - name: 准备 Windows 单文件便携版
         if: ${{ runner.os == 'Windows' }}
@@ -671,4 +671,4 @@ jobs:
       - name: 上传到 GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release upload "$GITHUB_REF_NAME" portable/*.exe --repo "$GITHUB_REPOSITORY"
+        run: gh release upload "$GITHUB_REF_NAME" portable/*.exe --repo "$GITHUB_REPOSITORY" --clobber
