@@ -26,6 +26,10 @@ src-tauri/icons/StoreLogo.png
 *.pem
 *.p12
 *.pfx
+*.keystore
+*.bks
+# 本地 Android 签名密钥与口令，禁止提交
+signing/
 raw_debug.json
 
 # Editors / OS
